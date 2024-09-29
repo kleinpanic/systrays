@@ -1,0 +1,63 @@
+# src/utils/sudo_prompt.py
+
+import tkinter as tk
+from tkinter import simpledialog, messagebox, Label, ttk
+import pam
+import subprocess
+import time
+
+pam_auth = pam.pam()
+
+def prompt_sudo_password(action_name):
+    max_attempts = 3
+    attempts = 0
+
+    root = tk.Tk()
+    root.withdraw()  # Hide the main Tkinter window
+
+    username = subprocess.getoutput("whoami")  # Get the current user
+
+    while attempts < max_attempts:
+        password = simpledialog.askstring("Sudo Password", f"Enter your sudo password to {action_name}:", show='*')
+
+        if password is None:  # If the user cancels the dialog
+            print("User canceled the password prompt.")
+            root.destroy()
+            return False  # Exit without further action
+
+        # Create a new window for the progress bar
+        progress_window = tk.Toplevel(root)
+        progress_window.title("Validating Password")
+        progress_label = Label(progress_window, text="Validating password, please wait...")
+        progress_label.pack(pady=10)
+
+        # Create a progress bar
+        progress_bar = ttk.Progressbar(progress_window, orient="horizontal", length=200, mode='determinate')
+        progress_bar.pack(pady=10, padx=20)
+
+        root.update()  # Force update to show the window and progress bar
+
+        # Simulate progress bar updates over 15 seconds
+        for i in range(15):
+            progress_bar['value'] += 100 / 15  # Update the progress bar dynamically
+            root.update()  # Ensure the GUI updates
+            time.sleep(1)  # Sleep for 1 second to simulate the time taken
+
+        # Perform PAM authentication
+        valid = pam_auth.authenticate(username, password)
+
+        progress_window.destroy()  # Close the progress window
+
+        if valid:
+            root.destroy()
+            print("Password validated successfully.")
+            return True  # Password is correct
+        else:
+            attempts += 1
+            print(f"Attempt {attempts}: Incorrect password.")
+            if attempts < max_attempts:
+                messagebox.showerror("Error", "Incorrect password. Please try again.")
+    
+    messagebox.showinfo("Canceled", "Maximum password attempts reached. Action canceled.")
+    root.destroy()  # Close the dialog window
+    return False  # Failed after maximum attempts

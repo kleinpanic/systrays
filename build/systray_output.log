@@ -1,0 +1,2 @@
+
+(main.py:1451612): Gdk-CRITICAL **: 05:46:35.900: gdk_window_thaw_toplevel_updates: assertion 'window->update_and_descendants_freeze_count > 0' failed

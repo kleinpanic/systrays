@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+# src/main.py
+
+import os
+import pystray
+from pystray import MenuItem as item, Menu
+from PIL import Image, ImageDraw
+import subprocess
+import threading
+import signal
+import psutil  # Import psutil to handle orphan processes
+from tkinter import messagebox
+from utils.sudo_prompt import prompt_sudo_password
+from utils.shutdown_timer import start_shutdown_timer
+from utils.conky import toggle_conky, check_conky_status
+from utils.bluetooth_control import show_bluetooth_control
+from utils.xrandr_tool import show_xrandr_control
+from utils.brightness_slider import show_brightness_slider  
+from utils.camera_recorder_control import toggle_camera, toggle_screenrecorder
+
+# Nerdfont glyphs for each action
+GLYPHS = {
+    "conky": "",
+    "bluetooth": "",
+    "power_off": "",
+    "reboot": "",
+    "display": "",
+    "brightness": "",
+    "camera": "",
+    "screenrecorder": "",
+    "quit": ""
+}
+
+# Global variables for PIDs
+camera_pid = None
+screenrecorder_pid = None
+systray_pid = os.getpid()  # Record the PID of the systray process
+
+def create_image():
+    try:
+        # Load the image from a file
+        image = Image.open('/home/klein/codeWS/Python3/systrays/assets/systray-icon.png')
+        # Resize to fit the systray, typically 16x16 or 24x24
+        image = image.resize((24, 24), Image.LANCZOS)  # Adjust the size as needed
+        return image
+    except Exception as e:
+        print(f"Error loading image: {e}")
+        # Fallback to a plain white image with a black rectangle if loading fails
+        width = 24
+        height = 24
+        image = Image.new('RGB', (width, height), (255, 255, 255))
+        draw = ImageDraw.Draw(image)
+        draw.rectangle(
+            (width // 4, height // 4, width * 3 // 4, height * 3 // 4),
+            fill='black')
+        return image
+
+def confirm_action(action_name):
+    root = tk.Tk()
+    root.withdraw()  # Hide the main window
+    result = messagebox.askyesno(f"{action_name} Confirmation", f"Are you sure you want to {action_name.lower()}?")
+    root.destroy()
+    return result
+
+def on_toggle_conky(icon, item):
+    toggle_conky()  # Toggle Conky state
+    update_menu(icon)  # Update the menu item text
+
+def on_bluetooth_control(icon, item):
+    show_bluetooth_control()
+
+def on_power_off(icon, item):
+    if confirm_action("Power Off"):
+        if prompt_sudo_password("Power off"):
+            print("Starting shutdown timer...")
+            start_shutdown_timer(60)  # Start a 60-second shutdown timer
+        else:
+            print("Shutdown canceled or failed due to incorrect password.")
+    else:
+        print("Power off canceled by user.")
+
+def on_reboot(icon, item):
+    if confirm_action("Reboot"):
+        if prompt_sudo_password("Reboot"):
+            subprocess.run(['sudo', 'reboot'])
+        else:
+            print("Reboot canceled or failed due to incorrect password.")
+    else:
+        print("Reboot canceled by user.")
+
+def on_xrandr_tool(icon, item):
+    show_xrandr_control()
+
+def on_brightness_slider(icon, item):
+    show_brightness_slider()  # Call the function to show the brightness slider window
+
+def on_toggle_camera(icon, item):
+    new_label = toggle_camera()  # Toggle camera state
+    item.text = f"{GLYPHS['camera']} {new_label}"  # Update menu item text
+
+def on_toggle_screenrecorder(icon, item):
+    new_label = toggle_screenrecorder()  # Toggle screen recorder state
+    item.text = f"{GLYPHS['screenrecorder']} {new_label}"  # Update menu item text
+
+def kill_process_tree(pid):
+    try:
+        parent = psutil.Process(pid)
+        for child in parent.children(recursive=True):
+            child.terminate()
+        parent.terminate()
+        gone, still_alive = psutil.wait_procs(parent.children(recursive=True), timeout=3)
+        for p in still_alive:
+            p.kill()  # Force kill if still running
+        parent.kill()
+        print(f"Process tree for PID {pid} terminated successfully.")
+    except psutil.NoSuchProcess:
+        print(f"No such process with PID {pid} found.")
+
+def on_quit_systray(icon, item):
+    if confirm_action("Quit Systray"):
+        # Kill camera and screen recorder if they are running
+        if camera_pid:
+            kill_process_tree(camera_pid)
+        if screenrecorder_pid:
+            kill_process_tree(screenrecorder_pid)
+        
+        # Kill the systray itself
+        kill_process_tree(systray_pid)
+        icon.stop()  # Stop the systray icon
+    else:
+        print("Quit action canceled by user.")
+
+def update_menu(icon):
+    separator = "─" * 30
+    icon.menu = Menu(
+        item(f"{GLYPHS['conky']} {check_conky_status()}", on_toggle_conky),
+        item(f"{GLYPHS['bluetooth']} Bluetooth Control", on_bluetooth_control),
+        item(f"{GLYPHS['camera']} Start Camera", on_toggle_camera),
+        item(f"{GLYPHS['screenrecorder']} Start Screen Recorder", on_toggle_screenrecorder),
+        item(f"{GLYPHS['power_off']} Power Off", on_power_off),
+        item(f"{GLYPHS['reboot']} Reboot", on_reboot),
+        item(f"{GLYPHS['display']} Display Settings", on_xrandr_tool),
+        item(f"{GLYPHS['brightness']} Brightness Slider", on_brightness_slider),
+        item(f"{GLYPHS['quit']} Quit", on_quit_systray)  # Quit option at the bottom
+    )
+    icon.update_menu()
+
+def periodic_update(icon):
+    update_menu(icon)
+    threading.Timer(5.0, periodic_update, [icon]).start()  # Refresh every 5 seconds
+
+def setup_systray():
+    pid = os.getpid()  # Get the current process ID
+    icon = pystray.Icon("systray_icon", create_image(), f"MPyStray {pid}")  # Set title with PID
+    icon.title = f"MPyStray {pid}"  # Ensure title is set (some platforms require this explicitly)
+    update_menu(icon)  # Set up the initial menu
+    periodic_update(icon)  # Start periodic updates to keep the menu in sync
+    icon.run()
+
+if __name__ == "__main__":
+    setup_systray()

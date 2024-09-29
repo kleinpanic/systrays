@@ -1,0 +1,9 @@
+pam
+pillow
+pycairo
+PyGObject
+pystray
+python-pam
+python-xlib
+six
+psutil

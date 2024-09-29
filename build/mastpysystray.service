@@ -1,0 +1,13 @@
+[Unit]
+Description=MastPySystray Service for XORG or WAYLAND
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mastpysystray
+Restart=on-failure
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=%h/.Xauthority
+
+[Install]
+WantedBy=default.target
