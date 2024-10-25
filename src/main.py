@@ -18,8 +18,8 @@ from utils.bluetooth_control import show_bluetooth_control
 from utils.xrandr_tool import show_xrandr_control
 from utils.brightness_slider import show_brightness_slider  
 from utils.camera_recorder_control import toggle_camera, toggle_screenrecorder
-from utils.screenshot_tool import display_screenshot_tool  # Import the screenshot tool
-
+from utils.screenshot_tool import display_screenshot_tool  
+from utils.clock import display_clock_tool  
 # Nerdfont glyphs for each action
 GLYPHS = {
     "conky": "",
@@ -30,7 +30,8 @@ GLYPHS = {
     "brightness": "",
     "camera": "",
     "screenrecorder": "",
-    "screenshot": "",  
+    "screenshot": "", 
+    "clock": "",  
     "quit": ""  
 }
 
@@ -76,6 +77,9 @@ def confirm_action(action_name):
     result = messagebox.askyesno(f"{action_name} Confirmation", f"Are you sure you want to {action_name.lower()}?")
     root.destroy()
     return result
+
+def on_clock_tool(icon, item):
+    display_clock_tool()  # Display the clock tool window
 
 def on_toggle_conky(icon, item):
     toggle_conky()  # Toggle Conky state
@@ -193,6 +197,7 @@ def update_menu(icon):
         item(f"{GLYPHS['reboot']} Reboot", on_reboot),
         item(f"{GLYPHS['display']} Display Settings", on_xrandr_tool),
         item(f"{GLYPHS['brightness']} Brightness Slider", on_brightness_slider),
+        item(f"{GLYPHS['clock']} Clock", on_clock_tool),
         item(f"{GLYPHS['quit']} Quit", on_quit_systray)  # Quit option at the bottom
     )
     icon.update_menu()
