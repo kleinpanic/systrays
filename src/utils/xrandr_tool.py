@@ -1,29 +1,31 @@
 import tkinter as tk
 from tkinter import messagebox
 import subprocess
-import re 
+import re
+import threading
+import logging
 
-# Global variables to track the initial and current states
-initial_orientation = None
-initial_resolution = None
-initial_position = None
-connected_displays = []  # To track currently connected displays
-main_display = None
+# Setup logging
+logging.basicConfig(filename='xrandr_tool.log', level=logging.DEBUG,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Global variables to manage the countdown timer window
-current_timer_window = None
-current_countdown_label = None
-timer_canceled = False
+# Lock to prevent concurrent xrandr operations
+xrandr_lock = threading.Lock()
+
+# Flag to indicate user-initiated changes
+user_initiating_change = False
 
 def run_xrandr_command(commands):
-    try:
-        result = subprocess.run(['xrandr'] + commands, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        output = result.stdout.decode().strip()
-        print(f"Executed: {' '.join(commands)}")
-        return output
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to execute {' '.join(commands)}: {e}")
-        return None
+    with xrandr_lock:
+        try:
+            result = subprocess.run(['xrandr'] + commands, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            output = result.stdout.decode().strip()
+            logging.info(f"Executed: {' '.join(['xrandr'] + commands)} | Output: {output}")
+            return output
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr.decode().strip()
+            logging.error(f"Failed to execute {' '.join(['xrandr'] + commands)} | Error: {error_msg}")
+            return None
 
 def get_main_display():
     try:
@@ -37,7 +39,7 @@ def get_main_display():
                 return line.split()[0]  # Fallback if primary not found
         return None
     except subprocess.CalledProcessError as e:
-        print(f"Failed to get main display: {e}")
+        logging.error(f"Failed to get main display: {e}")
         return None
 
 def get_external_displays(main_display):
@@ -53,7 +55,7 @@ def get_external_displays(main_display):
                     displays.append(display_name)
         return displays
     except subprocess.CalledProcessError as e:
-        print(f"Failed to get external displays: {e}")
+        logging.error(f"Failed to get external displays: {e}")
         return []
 
 def determine_display_positions():
@@ -103,7 +105,7 @@ def determine_display_positions():
     # Use existing functions to get main and external displays
     main_display = get_main_display()
     external_displays = get_external_displays(main_display)
-    
+
     if main_display:
         xrandr_output = run_xrandr()
         displays = parse_xrandr_output(xrandr_output)
@@ -118,7 +120,7 @@ def determine_display_positions():
                     positions[display] = position
         return main_display, positions
     else:
-        print("Main display not found")
+        logging.warning("Main display not found")
         return None, None
 
 def get_display_resolution(display):
@@ -127,12 +129,12 @@ def get_display_resolution(display):
         output = result.stdout.decode().strip()
         lines = output.splitlines()
         found_display = False
-        
+
         for line in lines:
             if display in line and "connected" in line:
                 found_display = True  # Start capturing after the display is found
                 continue
-            
+
             if found_display:
                 if "*" in line:
                     resolution = line.split()[0]
@@ -142,7 +144,7 @@ def get_display_resolution(display):
 
         return "Resolution not found."
     except subprocess.CalledProcessError as e:
-        print(f"Failed to get display resolution: {e}")
+        logging.error(f"Failed to get display resolution: {e}")
         return None
 
 def get_available_resolutions(display):
@@ -164,31 +166,31 @@ def get_available_resolutions(display):
                     resolutions.append(res_parts[0])
         return resolutions
     except subprocess.CalledProcessError as e:
-        print(f"Failed to get available resolutions for {display}: {e}")
+        logging.error(f"Failed to get available resolutions for {display}: {e}")
         return []
 
 def store_initial_values(orientation_var, position_var, resolution_var):
     global initial_orientation, initial_position, initial_resolution
-    
+
     # Get the main display
     main_display = get_main_display()
-    
+
     # Capture the initial orientation using the main display
     initial_orientation = capture_current_orientation(main_display)
-    
+
     # Capture the initial resolution using the main display
     initial_resolution = get_display_resolution(main_display)
-    
+
     # Determine the position of the connected display relative to the main display
     _, positions = determine_display_positions()
-    
+
     # Set the initial position using the determined position, assuming the first connected display
     if positions:
         initial_position = list(positions.values())[0]
     else:
         initial_position = "same-as"  # Default if no positions are found
-    
-    print(f"Debug: Initial Orientation: {initial_orientation}, Initial Position: {initial_position}, Initial Resolution: {initial_resolution}")
+
+    logging.debug(f"Initial Orientation: {initial_orientation}, Initial Position: {initial_position}, Initial Resolution: {initial_resolution}")
 
 def has_changed(orientation_var, position_var, resolution_var):
     return (orientation_var.get() != initial_orientation or
@@ -196,48 +198,65 @@ def has_changed(orientation_var, position_var, resolution_var):
             resolution_var.get() != initial_resolution)
 
 def apply_settings(main_display, display_var, position_var, resolution_var, root, orientation_var=None):
-    global initial_position, initial_resolution
+    global initial_position, initial_resolution, user_initiating_change
+
+    if user_initiating_change:
+        logging.info("User change already in progress. Skipping apply_settings.")
+        return
 
     # Automatically detect which display is being interacted with
     target_display = display_var.get() if display_var.get() else main_display
 
     if has_changed(orientation_var, position_var, resolution_var):
-        # Run the --auto command first
-        run_xrandr_command(['--output', target_display, '--auto'])
+        user_initiating_change = True
+        try:
+            # Combine all commands into a single xrandr call
+            commands = [
+                '--output', target_display, '--auto'
+            ]
 
-        if position_var.get() == "same-as":
-            run_xrandr_command(['--output', target_display, '--same-as', main_display])
-        elif target_display != main_display:
-            # Ensure the scaling is correct regardless of position
-            run_xrandr_command(['--output', target_display, '--auto', f'--{position_var.get()}', main_display])
+            if position_var.get() == "same-as":
+                commands += ['--same-as', main_display]
+            elif target_display != main_display:
+                commands += [f'--{position_var.get()}', main_display]
 
-        if resolution_var.get() != initial_resolution:
-            run_xrandr_command(['--output', target_display, '--mode', resolution_var.get()])
+            if resolution_var.get() != initial_resolution:
+                commands += ['--mode', resolution_var.get()]
 
-        new_orientation = orientation_var.get()
+            if orientation_var:
+                commands += ['--rotate', orientation_var.get()]
 
-        # Apply orientation change directly to the main display only
-        change_orientation(main_display, new_orientation, root, orientation_var)
+            output = run_xrandr_command(commands)
 
-        # Update the stored initial values for position and resolution, but not for orientation
-        initial_position = position_var.get()
-        initial_resolution = resolution_var.get()
+            if output is None:
+                messagebox.showerror("Error", "Failed to apply display settings. Reverting to previous configuration.")
+                revert_settings()
+            else:
+                # Apply orientation separately if needed
+                if orientation_var:
+                    change_orientation(main_display, orientation_var.get(), root, orientation_var)
+
+                # Update the stored initial values for position and resolution, but not for orientation
+                initial_position = position_var.get()
+                initial_resolution = resolution_var.get()
+        finally:
+            user_initiating_change = False
 
 def change_orientation(display, new_orientation, root, orientation_var, prompt_window=None):
     global initial_orientation
     try:
         if initial_orientation is None:
             initial_orientation = capture_current_orientation(display)
-            print(f"Stored initial orientation as: {initial_orientation}")
-        
+            logging.debug(f"Stored initial orientation as: {initial_orientation}")
+
         command = ['--output', display, '--rotate', new_orientation]
         result = run_xrandr_command(command)
         if result is not None:
             if new_orientation != "normal" and new_orientation != initial_orientation:
-                start_revert_timer(display, root, new_orientation, orientation_var)  # Corrected to pass orientation_var
+                start_revert_timer(display, root, new_orientation, orientation_var)
             else:
                 initial_orientation = new_orientation  # Update the initial orientation
-                print(f"Orientation saved as: {initial_orientation}")
+                logging.debug(f"Orientation saved as: {initial_orientation}")
             if prompt_window:
                 prompt_window.destroy()  # Close prompt window if orientation is "normal"
     except Exception as e:
@@ -266,7 +285,7 @@ def capture_current_orientation(display):
 
         return "normal"  # Default to normal if no valid line is found
     except subprocess.CalledProcessError as e:
-        print(f"Failed to capture current orientation for {display}: {e}")
+        logging.error(f"Failed to capture current orientation for {display}: {e}")
         return "normal"
 
 def start_revert_timer(display, root, new_orientation, orientation_var):
@@ -282,7 +301,7 @@ def start_revert_timer(display, root, new_orientation, orientation_var):
 
     def revert_orientation():
         if not timer_canceled:
-            print(f"Reverting orientation to {initial_orientation}")
+            logging.info(f"Reverting orientation to {initial_orientation}")
             run_xrandr_command(['--output', display, '--rotate', initial_orientation])
             notify_user(f"Orientation reverted to {initial_orientation}.")
             orientation_var.set(initial_orientation)  # Reset the dropdown to the initial display
@@ -310,7 +329,7 @@ def start_revert_timer(display, root, new_orientation, orientation_var):
         initial_orientation = new_orientation  # Update the original orientation to the new one only after confirmation
         if current_timer_window.winfo_exists():
             current_timer_window.destroy()  # Close the confirmation window
-        print(f"Orientation saved as: {initial_orientation}")
+        logging.info(f"Orientation saved as: {initial_orientation}")
         notify_user(f"Orientation set to {new_orientation} permanently.")
 
     # Create the new timer window
@@ -328,6 +347,8 @@ def start_revert_timer(display, root, new_orientation, orientation_var):
     update_timer()
 
 def notify_user(message):
+    logging.info(message)
+    # Optionally, use a notification library like `notify2` or `plyer` to show desktop notifications
     print(message)
 
 def reset_to_main_display_layout(root, display_var, position_var, resolution_var, resolution_menu, position_menu, resolution_label, external_resolution_label):
@@ -342,14 +363,19 @@ def reset_to_main_display_layout(root, display_var, position_var, resolution_var
     orientation_menu.pack(pady=10)
 
 def update_displays(main_display, display_var, resolution_var, resolution_label, external_resolution_label, position_menu, position_var, resolution_menu, root):
-    global connected_displays
+    global connected_displays, user_initiating_change
+    if user_initiating_change:
+        # Skip updating displays while user is making changes
+        root.after(10000, update_displays, main_display, display_var, resolution_var, resolution_label, external_resolution_label, position_menu, position_var, resolution_menu, root)
+        return
+
     new_displays = get_external_displays(main_display)
 
     # Detect disconnected displays and run xrandr --output {device} --off
     for old_display in connected_displays:
         if old_display not in new_displays:
             run_xrandr_command(['--output', old_display, '--off'])
-            print(f"Display {old_display} disconnected and turned off.")
+            logging.info(f"Display {old_display} disconnected and turned off.")
             # Revert to default layout if HDMI disconnected
             reset_to_main_display_layout(root, display_var, position_var, resolution_var, resolution_menu, position_menu, resolution_label, external_resolution_label)
 
@@ -377,7 +403,8 @@ def update_displays(main_display, display_var, resolution_var, resolution_label,
         else:
             reset_to_main_display_layout(root, display_var, position_var, resolution_var, resolution_menu, position_menu, resolution_label, external_resolution_label)
 
-    root.after(2000, update_displays, main_display, display_var, resolution_var, resolution_label, external_resolution_label, position_menu, position_var, resolution_menu, root)
+    # Schedule the next update after 10 seconds
+    root.after(10000, update_displays, main_display, display_var, resolution_var, resolution_label, external_resolution_label, position_menu, position_var, resolution_menu, root)
 
 def show_xrandr_control():
     global initial_orientation, connected_displays
@@ -390,7 +417,7 @@ def show_xrandr_control():
         messagebox.showerror("Error", "Could not detect the main display.")
         root.destroy()
         return
-    
+
     initial_orientation = capture_current_orientation(main_display)
 
     connected_displays = get_external_displays(main_display)
@@ -402,7 +429,7 @@ def show_xrandr_control():
     resolution_label.pack(pady=10)
 
     display_var = tk.StringVar(root)
-    
+
     external_resolution_label = tk.Label(root, text="")
     external_resolution_label.pack(pady=10)
 
@@ -443,12 +470,21 @@ def show_xrandr_control():
     # Store initial dropdown values
     store_initial_values(orientation_var, position_var, resolution_var)
 
-    apply_button = tk.Button(root, text="Apply Settings", command=lambda: apply_settings(main_display=get_main_display(), display_var=display_var, position_var=position_var, resolution_var=resolution_var, root=root, orientation_var=orientation_var))
+    apply_button = tk.Button(root, text="Apply Settings", command=lambda: apply_settings(
+        main_display=get_main_display(),
+        display_var=display_var,
+        position_var=position_var,
+        resolution_var=resolution_var,
+        root=root,
+        orientation_var=orientation_var
+    ))
     apply_button.pack(side=tk.BOTTOM, pady=20)
 
-    root.after(2000, update_displays, main_display, display_var, resolution_var, resolution_label, external_resolution_label, position_menu, position_var, resolution_menu, root)
+    # Start the first update after 10 seconds
+    root.after(10000, update_displays, main_display, display_var, resolution_var, resolution_label, external_resolution_label, position_menu, position_var, resolution_menu, root)
 
     root.bind('<Escape>', lambda event: root.destroy())
     root.bind('<q>', lambda event: root.destroy())
 
     root.mainloop()
+
