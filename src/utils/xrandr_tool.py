@@ -6,7 +6,7 @@ import threading
 import logging
 
 # Setup logging
-logging.basicConfig(filename='xrandr_tool.log', level=logging.DEBUG,
+logging.basicConfig(filename='/tmp/xrandr_tool.log', level=logging.DEBUG,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Lock to prevent concurrent xrandr operations
